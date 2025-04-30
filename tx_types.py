@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from typing import TypedDict, Literal, Optional, Callable
+from utils import get_signer
 
 class RegularInstruction(TypedDict):
         accounts: list[str]
@@ -128,3 +129,104 @@ class PotentialSandwich:
     def bot(self) -> str:
         return self.entry_tx.potential_swap.top_level_ix["programId"]
 
+@dataclass
+class TargetTx:
+    signature: str
+    signer: str
+    profit_token_amount: int
+    targeted_token_amount: int
+
+    @staticmethod
+    def from_potential_swap(tx: PotentialSwapWithTxContext, profit_token_vault: str, targeted_token_vault: str) -> "TargetTx":
+        transfer_infos = map(TransferInfo.from_ix, tx.potential_swap.transfer_instructions)
+        profit_token_transfer = next(filter(lambda x: x.source == profit_token_vault or x.destination == profit_token_vault, transfer_infos))
+        targeted_token_transfer = next(filter(lambda x: x.source == targeted_token_vault or x.destination == targeted_token_vault, transfer_infos))
+        return TargetTx(
+            signature=tx.tx_resp["transaction"]["signatures"][0],
+            signer=get_signer(tx.tx_resp),
+            profit_token_amount=profit_token_transfer.amount,
+            targeted_token_amount=targeted_token_transfer.amount
+        )
+
+@dataclass
+class AttackerTx:
+    signature: str
+    profit_token_amount: int
+    targeted_token_amount: int
+    jito_tip: int
+    priority_fee: int
+
+    @staticmethod
+    def from_potential_swap(tx: PotentialSwapWithTxContext, profit_token_vault: str, targeted_token_vault: str) -> "AttackerTx":
+        transfer_infos = map(TransferInfo.from_ix, tx.potential_swap.transfer_instructions)
+        profit_token_transfer = next(filter(lambda x: x.source == profit_token_vault or x.destination == profit_token_vault, transfer_infos))
+        targeted_token_transfer = next(filter(lambda x: x.source == targeted_token_vault or x.destination == targeted_token_vault, transfer_infos))
+        return AttackerTx(
+            signature=tx.tx_resp["transaction"]["signatures"][0],
+            profit_token_amount=profit_token_transfer.amount,
+            targeted_token_amount=targeted_token_transfer.amount,
+            jito_tip=0,
+            priority_fee=0
+        )
+
+@dataclass
+class Sandwich:
+    block: int
+    block_time: int
+    dex: str
+    pool: str
+    bot: str
+    attacker: str
+    profit_token: str
+    targeted_token: str
+    entry_tx: AttackerTx
+    target_txs: list[TargetTx]
+    exit_tx: AttackerTx
+
+
+class Exchanges:
+    ORCA_WHIRLPOOL_ADDRESS = 'whirLbMiicVdio4qvUfM5KAg6Ct8VwpYzGff3uctyCc'
+    RAYDIUM_CLMM_ADDRESS = 'CAMMCzo5YL8w4VFF8KVHrK22GGUsp5VTaW7grrKgrWqK'
+    RAYDIUM_LPV4_ADDRESS = '675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8'
+    METEORA_PP_ADDRESS = 'Eo7WjKq67rjJQSZxS6z3YkapzY3eMj6Xy8X5EQVn5UaB'
+    METEORA_DLMM_ADDRESS = 'LBUZKhRxPF3XUpBCjp4YzTKgLccjZhTSDM9YuVaPwxo'
+    LIFINITY_V2_ADDRESS = '2wT8Yq49kHgDzXuPxZSaeLaH1qbmGXtEyPy64bL7aD3c'
+    RAYDIUM_CPMM_ADDRESS = 'CPMMoo8L3F4NbTegBCKVNunggL7H1ZpdTHKxQB5qKP1C'
+    SOLFI_ADDRESS = 'SoLFiHG9TfgtdUXUjWAxi3LtvYuFyDLVhBWxdMZxyCe'
+    CROPPER_ADDRESS = 'H8W3ctz92svYg6mkn1UtGfu2aQr2fnUFHM1RhScEtQDt'
+    OBRIC_ADDRESS = 'obriQD1zbpyLz95G5n7nJe6a4DPjpFwa5XYPoNm113y'
+    STABBLE_ADDRESS = 'swapNyd8XiQwJ6ianp9snpu4brUqFxadzvHebnAXjJZ'
+    ZEROFI_ADDRESS = 'ZERor4xhbUycZ6gb9ntrhqscUcZmAbQDjEAtCf4hbZY'
+    OPENBOOK_V2_ADDRESS = 'opnb2LAfJYbRMAHHvqjCwQxanZn7ReEHp1k81EohpZb'
+    PUMP_SWAP_ADDRESS = 'pAMMBay6oceH9fJKBRHGP5D4bD4sWpmSwMn52FMfXEA'
+
+EXCHANGE_NAME_MAP = {
+    Exchanges.ORCA_WHIRLPOOL_ADDRESS: "orca",
+    Exchanges.RAYDIUM_CLMM_ADDRESS: "raydium_clmm",
+    Exchanges.RAYDIUM_LPV4_ADDRESS: "raydium_lpv4",
+    Exchanges.RAYDIUM_CPMM_ADDRESS: "raydium_cpmm",    
+    Exchanges.SOLFI_ADDRESS: "solfi",
+    Exchanges.CROPPER_ADDRESS: "cropper",
+    Exchanges.OBRIC_ADDRESS: "obric",
+    Exchanges.ZEROFI_ADDRESS: "zerofi",
+    Exchanges.OPENBOOK_V2_ADDRESS: "openbook_v2",
+    Exchanges.METEORA_DLMM_ADDRESS: "meteora_dlmm",
+    Exchanges.METEORA_PP_ADDRESS: "meteora_pp",
+    Exchanges.LIFINITY_V2_ADDRESS: "lifinity_v2",
+    Exchanges.PUMP_SWAP_ADDRESS: "pump_swap",
+}
+
+EXCHANGES_INFO = {
+    Exchanges.ORCA_WHIRLPOOL_ADDRESS: ExchangeInfo(2, lambda x: True),
+    Exchanges.RAYDIUM_CLMM_ADDRESS: ExchangeInfo(2, lambda x: True),
+    Exchanges.RAYDIUM_LPV4_ADDRESS: ExchangeInfo(1, lambda x: True),
+    Exchanges.METEORA_PP_ADDRESS: ExchangeInfo(0, lambda x: True),
+    Exchanges.METEORA_DLMM_ADDRESS: ExchangeInfo(0, lambda x: True),
+    Exchanges.LIFINITY_V2_ADDRESS: ExchangeInfo(1, lambda x: True),
+    Exchanges.SOLFI_ADDRESS: ExchangeInfo(1, lambda x: True),
+    Exchanges.CROPPER_ADDRESS: ExchangeInfo(2, lambda x: True),
+    Exchanges.OBRIC_ADDRESS: ExchangeInfo(0, lambda x: True),
+    Exchanges.OPENBOOK_V2_ADDRESS: ExchangeInfo(2, lambda x: True),
+    Exchanges.ZEROFI_ADDRESS: ExchangeInfo(0, lambda x: True),
+    Exchanges.PUMP_SWAP_ADDRESS: ExchangeInfo(0, lambda x: True),
+}

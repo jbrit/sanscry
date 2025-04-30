@@ -1,4 +1,8 @@
 import aiohttp
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from tx_types import TransactionResponse
 
 async def get_block(rpc_url, slot):
     payload = {
@@ -26,3 +30,6 @@ async def get_block(rpc_url, slot):
                 raise Exception(f"RPC Error: {block_data['error']['message']}")
             
     return block_data["result"]
+
+def get_signer(tx_resp: 'TransactionResponse') -> str:
+    return next(acc["pubkey"] for acc in tx_resp["transaction"]["message"]["accountKeys"] if acc["signer"])
