@@ -1,6 +1,6 @@
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import declarative_base, sessionmaker
-from sqlalchemy import Column, String, Integer, ForeignKey, Table, select, Enum, UniqueConstraint, BigInteger, func, PrimaryKeyConstraint, case, distinct
+from sqlalchemy import Column, String, Integer, ForeignKey, Table, select, Enum, UniqueConstraint, BigInteger, func, PrimaryKeyConstraint, case, distinct, exists, and_, not_
 from sqlalchemy.orm import relationship
 from typing import AsyncGenerator
 import enum
@@ -506,6 +506,162 @@ async def get_attack_frequency_per_program() -> list[dict]:
         ]
     
 
+async def get_most_profitable_sandwiches(limit: int = 10) -> list[dict]:
+    """
+    Returns the most profitable sandwiches including:
+    - sandwich_id: the sandwich identifier
+    - profit: total profit in SOL
+    - block: block number
+    - block_time: block timestamp
+    - dex: DEX name
+    - pool: pool address
+    - bot: bot address
+    - attacker: attacker address
+    """
+    async with async_session() as session:
+        # First, get sandwich IDs where exit target amount <= entry target amount
+        entry_txs = select(AttackerTx.sandwich_id.label('sid'), 
+                           AttackerTx.targeted_token_amount.label('entry_amount')
+                    ).where(AttackerTx.type == AttackerTxType.ENTRY).subquery()
+                    
+        exit_txs = select(AttackerTx.sandwich_id.label('sid'), 
+                           AttackerTx.targeted_token_amount.label('exit_amount')
+                    ).where(AttackerTx.type == AttackerTxType.EXIT).subquery()
+        
+        valid_sandwiches = select(entry_txs.c.sid).join(
+            exit_txs, 
+            and_(
+                entry_txs.c.sid == exit_txs.c.sid,
+                exit_txs.c.exit_amount <= entry_txs.c.entry_amount
+            )
+        ).subquery()
+        
+        # Calculate profit per sandwich for valid sandwiches
+        sandwich_profits = select(
+            Sandwich.id,
+            Sandwich.block,
+            Sandwich.block_time,
+            Sandwich.dex,
+            Sandwich.pool,
+            Sandwich.bot,
+            Sandwich.attacker,
+            func.sum(case(
+                (AttackerTx.type == AttackerTxType.EXIT, AttackerTx.profit_token_amount),
+                (AttackerTx.type == AttackerTxType.ENTRY, -AttackerTx.profit_token_amount),
+                else_=0
+            )).label('profit')
+        ).join(
+            AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112',  # SOL token address
+            Sandwich.id.in_(valid_sandwiches)
+        ).group_by(
+            Sandwich.id,
+            Sandwich.block,
+            Sandwich.block_time,
+            Sandwich.dex,
+            Sandwich.pool,
+            Sandwich.bot,
+            Sandwich.attacker
+        ).order_by(
+            func.sum(case(
+                (AttackerTx.type == AttackerTxType.EXIT, AttackerTx.profit_token_amount),
+                (AttackerTx.type == AttackerTxType.ENTRY, -AttackerTx.profit_token_amount),
+                else_=0
+            )).desc()
+        ).limit(limit)
+
+        result = await session.execute(sandwich_profits)
+        
+        return [
+            {
+                'sandwich_id': row.id,
+                'profit': float(int(row.profit) / (10**9)),
+                'block': row.block,
+                'block_time': row.block_time,
+                'dex': row.dex,
+                'pool': row.pool,
+                'bot': row.bot,
+                'attacker': row.attacker
+            } for row in result
+        ]
+
+async def get_latest_sandwiches(limit: int = 10) -> list[dict]:
+    """
+    Returns the latest sandwiches including:
+    - sandwich_id: the sandwich identifier
+    - profit: total profit in SOL
+    - block: block number
+    - block_time: block timestamp
+    - dex: DEX name
+    - pool: pool address
+    - bot: bot address
+    - attacker: attacker address
+    """
+    async with async_session() as session:
+        # First, get sandwich IDs where exit target amount <= entry target amount
+        entry_txs = select(AttackerTx.sandwich_id.label('sid'), 
+                           AttackerTx.targeted_token_amount.label('entry_amount')
+                    ).where(AttackerTx.type == AttackerTxType.ENTRY).subquery()
+                    
+        exit_txs = select(AttackerTx.sandwich_id.label('sid'), 
+                           AttackerTx.targeted_token_amount.label('exit_amount')
+                    ).where(AttackerTx.type == AttackerTxType.EXIT).subquery()
+        
+        valid_sandwiches = select(entry_txs.c.sid).join(
+            exit_txs, 
+            and_(
+                entry_txs.c.sid == exit_txs.c.sid,
+                exit_txs.c.exit_amount <= entry_txs.c.entry_amount
+            )
+        ).subquery()
+        
+        # Get latest sandwiches with profit calculation for valid sandwiches
+        latest_sandwiches = select(
+            Sandwich.id,
+            Sandwich.block,
+            Sandwich.block_time,
+            Sandwich.dex,
+            Sandwich.pool,
+            Sandwich.bot,
+            Sandwich.attacker,
+            func.sum(case(
+                (AttackerTx.type == AttackerTxType.EXIT, AttackerTx.profit_token_amount),
+                (AttackerTx.type == AttackerTxType.ENTRY, -AttackerTx.profit_token_amount),
+                else_=0
+            )).label('profit')
+        ).join(
+            AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112',  # SOL token address
+            Sandwich.id.in_(valid_sandwiches)
+        ).group_by(
+            Sandwich.id,
+            Sandwich.block,
+            Sandwich.block_time,
+            Sandwich.dex,
+            Sandwich.pool,
+            Sandwich.bot,
+            Sandwich.attacker
+        ).order_by(
+            Sandwich.block.desc()
+        ).limit(limit)
+
+        result = await session.execute(latest_sandwiches)
+        
+        return [
+            {
+                'sandwich_id': row.id,
+                'profit': float(int(row.profit) / (10**9)),
+                'block': row.block,
+                'block_time': row.block_time,
+                'dex': row.dex,
+                'pool': row.pool,
+                'bot': row.bot,
+                'attacker': row.attacker
+            } for row in result
+        ]
+
 async def get_all_stats():
     stats = {}
     stats["profit_token_stats"] = await get_profit_token_stats()
@@ -515,3 +671,125 @@ async def get_all_stats():
     stats["bot_cumulative_profits"] = await get_bot_cumulative_profits()
     stats["attack_frequency_per_program"] = await get_attack_frequency_per_program()
     return stats
+
+async def get_sandwich_highlights():
+    return {
+        "most_profitable_sandwiches": await get_most_profitable_sandwiches(),
+        "latest_sandwiches": await get_latest_sandwiches()
+    }
+
+async def get_sandwich_by_id(sandwich_id: str) -> dict | None:
+    """
+    Returns detailed information about a specific sandwich including:
+    - sandwich_id: the sandwich identifier
+    - profit: total profit in SOL
+    - block: block number
+    - block_time: block timestamp
+    - dex: DEX name
+    - pool: pool address
+    - bot: bot address
+    - attacker: attacker address
+    - entry_tx: entry transaction details (from_token=profit_token, to_token=targeted_token)
+    - exit_tx: exit transaction details (from_token=targeted_token, to_token=profit_token)
+    - target_txs: list of target transactions (from_token=profit_token, to_token=targeted_token)
+    """
+    async with async_session() as session:
+        # Get sandwich details with profit calculation
+        sandwich_query = select(
+            Sandwich.id,
+            Sandwich.block,
+            Sandwich.block_time,
+            Sandwich.dex,
+            Sandwich.pool,
+            Sandwich.bot,
+            Sandwich.attacker,
+            Sandwich.profit_token,
+            Sandwich.targeted_token,
+            func.sum(case(
+                (AttackerTx.type == AttackerTxType.EXIT, AttackerTx.profit_token_amount),
+                (AttackerTx.type == AttackerTxType.ENTRY, -AttackerTx.profit_token_amount),
+                else_=0
+            )).label('profit')
+        ).join(
+            AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.id == sandwich_id,
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'  # SOL token address
+        ).group_by(
+            Sandwich.id,
+            Sandwich.block,
+            Sandwich.block_time,
+            Sandwich.dex,
+            Sandwich.pool,
+            Sandwich.bot,
+            Sandwich.attacker,
+            Sandwich.profit_token,
+            Sandwich.targeted_token
+        )
+
+        sandwich_result = await session.execute(sandwich_query)
+        sandwich = sandwich_result.first()
+        
+        if not sandwich:
+            return None
+
+        # Get entry and exit transactions
+        attacker_txs_query = select(
+            AttackerTx
+        ).where(
+            AttackerTx.sandwich_id == sandwich_id
+        )
+
+        attacker_txs_result = await session.execute(attacker_txs_query)
+        attacker_txs = attacker_txs_result.scalars().all()
+
+        entry_tx = next((tx for tx in attacker_txs if tx.type == AttackerTxType.ENTRY), None)
+        exit_tx = next((tx for tx in attacker_txs if tx.type == AttackerTxType.EXIT), None)
+
+        # Get target transactions
+        target_txs_query = select(
+            TargetTx
+        ).where(
+            TargetTx.sandwich_id == sandwich_id
+        )
+
+        target_txs_result = await session.execute(target_txs_query)
+        target_txs = target_txs_result.scalars().all()
+
+        return {
+            'sandwich_id': sandwich.id,
+            'profit': float(int(sandwich.profit) / (10**9)),
+            'block': sandwich.block,
+            'block_time': sandwich.block_time,
+            'dex': sandwich.dex,
+            'pool': sandwich.pool,
+            'bot': sandwich.bot,
+            'attacker': sandwich.attacker,
+            'entry_tx': {
+                'signature': entry_tx.signature,
+                'from_token': sandwich.profit_token,
+                'to_token': sandwich.targeted_token,
+                'from_token_amount': float(int(entry_tx.profit_token_amount) / (10**9)),
+                'to_token_amount': float(int(entry_tx.targeted_token_amount) / (10**9)),
+                'jito_tip': float(int(entry_tx.jito_tip) / (10**9)),
+                'priority_fee': float(int(entry_tx.priority_fee) / (10**9))
+            } if entry_tx else None,
+            'exit_tx': {
+                'signature': exit_tx.signature,
+                'from_token': sandwich.targeted_token,
+                'to_token': sandwich.profit_token,
+                'from_token_amount': float(int(exit_tx.targeted_token_amount) / (10**9)),
+                'to_token_amount': float(int(exit_tx.profit_token_amount) / (10**9)),
+                'jito_tip': float(int(exit_tx.jito_tip) / (10**9)),
+                'priority_fee': float(int(exit_tx.priority_fee) / (10**9))
+            } if exit_tx else None,
+            'target_txs': [{
+                'signature': tx.signature,
+                'signer': tx.signer,
+                'from_token': sandwich.profit_token,
+                'to_token': sandwich.targeted_token,
+                'from_token_amount': float(int(tx.profit_token_amount) / (10**9)),
+                'to_token_amount': float(int(tx.targeted_token_amount) / (10**9))
+            } for tx in target_txs]
+        }
+
