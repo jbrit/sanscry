@@ -178,7 +178,7 @@ class AttackerTx:
             profit_token_amount=profit_token_transfer.amount,
             targeted_token_amount=targeted_token_transfer.amount,
             jito_tip=AttackerTx.get_jito_tip(tx, jito_tip_accounts),
-            priority_fee=0
+            priority_fee=AttackerTx.get_priority_fee(tx)
         )
     
     @staticmethod
@@ -191,6 +191,11 @@ class AttackerTx:
                 if (parsed_ix := ix.get("parsed")) and parsed_ix["type"] == "transfer" and parsed_ix["info"]["destination"] in jito_tip_accounts:
                     return int(parsed_ix["info"]["lamports"])
         return 0
+    
+    @staticmethod
+    def get_priority_fee(tx: PotentialSwapWithTxContext) -> int:
+        fee = tx.tx_resp["meta"]["fee"] - 5000 if "fee" in tx.tx_resp["meta"] else 0
+        return fee
 
 @dataclass
 class Sandwich:
