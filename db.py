@@ -179,6 +179,10 @@ async def get_latest_block() -> int:
         latest_block = result.scalar()
         return latest_block if latest_block is not None else 0
 
+async def get_distinct_sandwich_blocks() -> list[int]:
+    async with async_session() as session:
+        result = await session.execute(select(distinct(Sandwich.block)))
+        return [block for block in result.scalars().all()]
 
 async def get_profit_token_stats() -> list[dict]:
     """
@@ -238,11 +242,6 @@ async def get_profit_token_stats() -> list[dict]:
             } for row in result
         ]
         return stats
-
-async def get_distinct_sandwich_blocks() -> list[int]:
-    async with async_session() as session:
-        result = await session.execute(select(distinct(Sandwich.block)))
-        return [block for block in result.scalars().all()]
 
 async def get_most_targeted_tokens() -> list[dict]:
     """
