@@ -206,10 +206,24 @@ async def get_profit_token_stats() -> list[dict]:
             func.sum(AttackerTx.jito_tip).label('jito_tip')
         ).join(
             AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'  # SOL token address
         ).group_by(
             Sandwich.profit_token,
             Sandwich.attacker,
             Sandwich.id
+        ).subquery()
+
+        # Subquery to get unique victims per profit token
+        unique_victims = select(
+            Sandwich.profit_token,
+            func.count(distinct(TargetTx.signer)).label('unique_victims')
+        ).join(
+            TargetTx, Sandwich.id == TargetTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'
+        ).group_by(
+            Sandwich.profit_token
         ).subquery()
 
         # Main query to aggregate statistics
@@ -220,13 +234,12 @@ async def get_profit_token_stats() -> list[dict]:
                 func.sum(entry_exit_profit.c.net_profit).label('total_profit'),
                 func.sum(entry_exit_profit.c.jito_tip).label('total_jito_tip'),
                 func.count(distinct(entry_exit_profit.c.attacker)).label('unique_attackers'),
-                func.count(distinct(TargetTx.signer)).label('unique_victims')
+                unique_victims.c.unique_victims
             ).join(
-                Sandwich, Sandwich.profit_token == entry_exit_profit.c.profit_token
-            ).join(
-                TargetTx, Sandwich.id == TargetTx.sandwich_id
+                unique_victims, entry_exit_profit.c.profit_token == unique_victims.c.profit_token
             ).group_by(
-                entry_exit_profit.c.profit_token
+                entry_exit_profit.c.profit_token,
+                unique_victims.c.unique_victims
             )
         )
 
@@ -264,6 +277,8 @@ async def get_most_targeted_tokens() -> list[dict]:
             )).label('profit')
         ).join(
             AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'  # SOL token address
         ).group_by(
             Sandwich.targeted_token,
             Sandwich.attacker,
@@ -314,6 +329,8 @@ async def get_most_targeted_programs() -> list[dict]:
             )).label('profit')
         ).join(
             AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'  # SOL token address
         ).group_by(
             Sandwich.dex,
             Sandwich.pool,
@@ -364,6 +381,8 @@ async def get_most_exploited_pools() -> list[dict]:
             )).label('profit')
         ).join(
             AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'  # SOL token address
         ).group_by(
             Sandwich.pool,
             Sandwich.dex,
@@ -414,6 +433,8 @@ async def get_bot_cumulative_profits() -> list[dict]:
             )).label('profit')
         ).join(
             AttackerTx, Sandwich.id == AttackerTx.sandwich_id
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'  # SOL token address
         ).group_by(
             Sandwich.bot,
             Sandwich.id
@@ -457,6 +478,8 @@ async def get_attack_frequency_per_program() -> list[dict]:
             Sandwich.block,
             Sandwich.id,
             Sandwich.attacker
+        ).where(
+            Sandwich.profit_token == 'So11111111111111111111111111111111111111112'  # SOL token address
         ).subquery()
 
         # Then aggregate by DEX
