@@ -138,9 +138,15 @@ class TargetTx:
 
     @staticmethod
     def from_potential_swap(tx: PotentialSwapWithTxContext, profit_token_vault: str, targeted_token_vault: str) -> "TargetTx":
-        transfer_infos = map(TransferInfo.from_ix, tx.potential_swap.transfer_instructions)
-        profit_token_transfer = next(filter(lambda x: x.source == profit_token_vault or x.destination == profit_token_vault, transfer_infos))
-        targeted_token_transfer = next(filter(lambda x: x.source == targeted_token_vault or x.destination == targeted_token_vault, transfer_infos))
+        transfer_infos = list(map(TransferInfo.from_ix, tx.potential_swap.transfer_instructions))
+        if profit_token_vault == transfer_infos[0].source or profit_token_vault == transfer_infos[0].destination:
+            profit_token_transfer = transfer_infos[0]
+            targeted_token_transfer = transfer_infos[1]
+        elif targeted_token_vault == transfer_infos[0].source or targeted_token_vault == transfer_infos[0].destination:
+            profit_token_transfer = transfer_infos[1]
+            targeted_token_transfer = transfer_infos[0]
+        else:
+            raise Exception(f"Unknown transfer instruction: {tx.potential_swap.transfer_instructions}")
         return TargetTx(
             signature=tx.tx_resp["transaction"]["signatures"][0],
             signer=get_signer(tx.tx_resp),
@@ -157,17 +163,34 @@ class AttackerTx:
     priority_fee: int
 
     @staticmethod
-    def from_potential_swap(tx: PotentialSwapWithTxContext, profit_token_vault: str, targeted_token_vault: str) -> "AttackerTx":
-        transfer_infos = map(TransferInfo.from_ix, tx.potential_swap.transfer_instructions)
-        profit_token_transfer = next(filter(lambda x: x.source == profit_token_vault or x.destination == profit_token_vault, transfer_infos))
-        targeted_token_transfer = next(filter(lambda x: x.source == targeted_token_vault or x.destination == targeted_token_vault, transfer_infos))
+    def from_potential_swap(tx: PotentialSwapWithTxContext, profit_token_vault: str, targeted_token_vault: str, jito_tip_accounts: set[str]) -> "AttackerTx":
+        transfer_infos = list(map(TransferInfo.from_ix, tx.potential_swap.transfer_instructions))
+        if profit_token_vault == transfer_infos[0].source or profit_token_vault == transfer_infos[0].destination:
+            profit_token_transfer = transfer_infos[0]
+            targeted_token_transfer = transfer_infos[1]
+        elif targeted_token_vault == transfer_infos[0].source or targeted_token_vault == transfer_infos[0].destination:
+            profit_token_transfer = transfer_infos[1]
+            targeted_token_transfer = transfer_infos[0]
+        else:
+            raise Exception(f"Unknown transfer instruction: {tx.potential_swap.transfer_instructions}")
         return AttackerTx(
             signature=tx.tx_resp["transaction"]["signatures"][0],
             profit_token_amount=profit_token_transfer.amount,
             targeted_token_amount=targeted_token_transfer.amount,
-            jito_tip=0,
+            jito_tip=AttackerTx.get_jito_tip(tx, jito_tip_accounts),
             priority_fee=0
         )
+    
+    @staticmethod
+    def get_jito_tip(tx: PotentialSwapWithTxContext, jito_tip_accounts: set[str]) -> int:
+        for ix in tx.tx_resp["transaction"]["message"]["instructions"]:
+            if (parsed_ix := ix.get("parsed")) and parsed_ix["type"] == "transfer" and parsed_ix["info"]["destination"] in jito_tip_accounts:
+                return int(parsed_ix["info"]["lamports"])
+        for inner_ix in tx.tx_resp["meta"]["innerInstructions"]:
+            for ix in inner_ix["instructions"]:
+                if (parsed_ix := ix.get("parsed")) and parsed_ix["type"] == "transfer" and parsed_ix["info"]["destination"] in jito_tip_accounts:
+                    return int(parsed_ix["info"]["lamports"])
+        return 0
 
 @dataclass
 class Sandwich:

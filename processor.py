@@ -1,8 +1,11 @@
 import asyncio
-from config import RPC_URL
+from config import RPC_URL, FAST_RPC_URL
 from utils import get_block, get_signer
 from tx_types import PotentialSwap, TransactionResponse, TransferInfo, Instruction, PotentialSwapWithTxContext, PotentialSandwich, Sandwich, AttackerTx, TargetTx, EXCHANGES_INFO
-from db import get_pools_map
+from db import get_pools_map, store_sandwich, get_latest_block
+from solana.rpc.async_api import AsyncClient
+from solders.pubkey import Pubkey
+from solana.rpc.types import DataSliceOpts, MemcmpOpts
 
 
 transfer_types = {"transfer", "transferChecked"}
@@ -147,16 +150,26 @@ async def parse_block_for_potential_sandwiches(block_number: int, rpc_url: str):
 
 
 async def main():
+    client = AsyncClient(RPC_URL)
+    accounts = await client.get_program_accounts(Pubkey.from_string("T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt"), data_slice=DataSliceOpts(0,0), filters=(MemcmpOpts(0, "aeEqPScSxUP"),))
+    jito_tip_accounts = set(map(lambda x: str(x.pubkey), accounts.value))
+    last_db_block = await get_latest_block()  # NOTE: Block 336454917: embedded sandwiches?
+    last_db_block = 336_902_528 if last_db_block == 0 else last_db_block
+    blocks = (await client.get_blocks(last_db_block+1, last_db_block+100)).value
+    if len(blocks) > 1:
+        print(f"Processing blocks {blocks[0]} - {blocks[-1]} ({len(blocks)} blocks)")
+    else:
+        print(f"Processing blocks {blocks}")
     pools_map = await get_pools_map()
-    print(len(pools_map.keys()))
-    cslot = 336_902_506  # NOTE: Block 336454917: embedded sandwhiches?
-    for block_number in range(cslot, cslot + 1):
+    print(f"Found {len(pools_map.keys())} pools")
+    for block_number in blocks:
         print(f"Processing block {block_number}")
-        potential_sandwiches, block_time = await parse_block_for_potential_sandwiches(block_number, RPC_URL)
+        await asyncio.sleep(0.25)
+        potential_sandwiches, block_time = await parse_block_for_potential_sandwiches(block_number, FAST_RPC_URL)
         for potential_sandwich in potential_sandwiches:
             dex = potential_sandwich.entry_tx.potential_swap.exchange_instruction["programId"]
             if dex not in EXCHANGES_INFO:
-                print(f"Unknown dex with sandwhich: {dex}")
+                print(f"Unknown dex with sandwich: {dex}")
                 continue
             exchange_info = EXCHANGES_INFO[dex]
             if len(potential_sandwich.entry_tx.potential_swap.exchange_instruction["accounts"]) <= exchange_info.pool_index:
@@ -169,27 +182,23 @@ async def main():
             pool_info = pools_map[pool_address]
             for transfer_ix in potential_sandwich.entry_tx.potential_swap.transfer_instructions:
                 transfer_info = TransferInfo.from_ix(transfer_ix)
-                if transfer_info.destination == pool_info.token_a_vault:
+                if transfer_info.destination == pool_info.token_a_vault or transfer_info.source == pool_info.token_b_vault:
                     profit_token = pool_info.token_a
                     targeted_token = pool_info.token_b
+                    profit_token_vault = pool_info.token_a_vault
+                    targeted_token_vault = pool_info.token_b_vault
                     break
-                elif transfer_info.destination == pool_info.token_b_vault:
+                elif transfer_info.destination == pool_info.token_b_vault or transfer_info.source == pool_info.token_a_vault:
                     profit_token = pool_info.token_b
                     targeted_token = pool_info.token_a
-                    break
-                elif transfer_info.source == pool_info.token_a_vault:
-                    profit_token = pool_info.token_b
-                    targeted_token = pool_info.token_a
-                    break
-                elif transfer_info.source == pool_info.token_b_vault:
-                    profit_token = pool_info.token_a
-                    targeted_token = pool_info.token_b
+                    profit_token_vault = pool_info.token_b_vault
+                    targeted_token_vault = pool_info.token_a_vault
                     break
             else:
                 print(f"Unmatchable trade direction")
                 continue
 
-            sandwhich = Sandwich(
+            sandwich = Sandwich(
                 block=block_number,
                 block_time=block_time,
                 dex=dex,
@@ -198,12 +207,14 @@ async def main():
                 attacker=get_signer(potential_sandwich.entry_tx.tx_resp),
                 profit_token=profit_token,
                 targeted_token=targeted_token,
-                entry_tx=AttackerTx.from_potential_swap(potential_sandwich.entry_tx, pool_info.token_a_vault, pool_info.token_b_vault),
-                target_txs=[TargetTx.from_potential_swap(tx, pool_info.token_a_vault, pool_info.token_b_vault) for tx in potential_sandwich.target_txs],
-                exit_tx=AttackerTx.from_potential_swap(potential_sandwich.exit_tx, pool_info.token_a_vault, pool_info.token_b_vault)
+                entry_tx=AttackerTx.from_potential_swap(potential_sandwich.entry_tx, profit_token_vault, targeted_token_vault, jito_tip_accounts),
+                target_txs=[TargetTx.from_potential_swap(tx, profit_token_vault, targeted_token_vault) for tx in potential_sandwich.target_txs],
+                exit_tx=AttackerTx.from_potential_swap(potential_sandwich.exit_tx, profit_token_vault, targeted_token_vault, jito_tip_accounts)
             )
-            print(sandwhich)
-        await asyncio.sleep(1)
+            if sandwich.exit_tx.profit_token_amount - sandwich.entry_tx.profit_token_amount > 0:
+                await store_sandwich(sandwich)
+            else:
+                print(f"Skipping sandwich with negative profit: {sandwich.entry_tx.signature} -> {sandwich.exit_tx.signature}")
 
 if __name__ == "__main__":
     asyncio.run(main())
