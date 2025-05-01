@@ -2,7 +2,7 @@ import asyncio
 from config import RPC_URL, FAST_RPC_URL
 from utils import get_block, get_signer
 from tx_types import PotentialSwap, TransactionResponse, TransferInfo, Instruction, PotentialSwapWithTxContext, PotentialSandwich, Sandwich, AttackerTx, TargetTx, EXCHANGES_INFO
-from db import get_pools_map, store_sandwich, get_latest_block
+from db import get_pools_map, store_sandwich, clear_db, get_latest_block
 from solana.rpc.async_api import AsyncClient
 from solders.pubkey import Pubkey
 from solana.rpc.types import DataSliceOpts, MemcmpOpts
@@ -136,16 +136,6 @@ async def parse_block_for_potential_sandwiches(block_number: int, rpc_url: str):
                 if valid_sequence and target_txs:
                     attacker_tx_set.update(entry_signature, exit_signature)
                     potential_sandwiches.append(PotentialSandwich(entry_tx, target_txs, exit_tx))
-                    print(f"Potential sandwich found:")
-                    print(f"Bot: {None if entry_tx.potential_swap.is_top_level else entry_tx.potential_swap.top_level_ix['programId']}")
-                    print(f"Signer: {entry_signer}")
-                    print(f"Entry tx: {entry_signature}")
-                    print(f"Target txs:")
-                    for tx in target_txs:
-                        print(f"    {get_signature(tx.tx_resp)} signer: {get_signer(tx.tx_resp)}")
-                    print(f"Exit tx: {exit_signature}")
-                    print(f"DEX: {entry_dex}")
-                    print("---")
     return potential_sandwiches, int(block["blockTime"])
 
 
@@ -154,8 +144,7 @@ async def main():
     accounts = await client.get_program_accounts(Pubkey.from_string("T1pyyaTNZsKv2WcRAB8oVnk93mLJw2XzjtVYqCsaHqt"), data_slice=DataSliceOpts(0,0), filters=(MemcmpOpts(0, "aeEqPScSxUP"),))
     jito_tip_accounts = set(map(lambda x: str(x.pubkey), accounts.value))
     last_db_block = await get_latest_block()  # NOTE: Block 336454917: embedded sandwiches?
-    last_db_block = 336_902_528 if last_db_block == 0 else last_db_block
-    blocks = (await client.get_blocks(last_db_block+1, last_db_block+100)).value
+    blocks = ((await client.get_blocks(last_db_block+1)).value)[-1000:]
     if len(blocks) > 1:
         print(f"Processing blocks {blocks[0]} - {blocks[-1]} ({len(blocks)} blocks)")
     else:
@@ -164,7 +153,6 @@ async def main():
     print(f"Found {len(pools_map.keys())} pools")
     for block_number in blocks:
         print(f"Processing block {block_number}")
-        await asyncio.sleep(0.25)
         potential_sandwiches, block_time = await parse_block_for_potential_sandwiches(block_number, FAST_RPC_URL)
         for potential_sandwich in potential_sandwiches:
             dex = potential_sandwich.entry_tx.potential_swap.exchange_instruction["programId"]
@@ -211,10 +199,12 @@ async def main():
                 target_txs=[TargetTx.from_potential_swap(tx, profit_token_vault, targeted_token_vault) for tx in potential_sandwich.target_txs],
                 exit_tx=AttackerTx.from_potential_swap(potential_sandwich.exit_tx, profit_token_vault, targeted_token_vault, jito_tip_accounts)
             )
-            if sandwich.exit_tx.profit_token_amount - sandwich.entry_tx.profit_token_amount > 0:
-                await store_sandwich(sandwich)
-            else:
+            if sandwich.exit_tx.profit_token_amount - sandwich.entry_tx.profit_token_amount < 0:
                 print(f"Skipping sandwich with negative profit: {sandwich.entry_tx.signature} -> {sandwich.exit_tx.signature}")
+            elif sandwich.exit_tx.targeted_token_amount - sandwich.entry_tx.targeted_token_amount > 0:
+                print(f"Skipping sandwich with targeted token amount overflow: {sandwich.entry_tx.signature} -> {sandwich.exit_tx.signature}")
+            else:
+                await store_sandwich(sandwich)
 
 if __name__ == "__main__":
     asyncio.run(main())
